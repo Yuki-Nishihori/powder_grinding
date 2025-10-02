@@ -51,6 +51,7 @@ class MotionPrimitive:
         self.grinding_ee_link = rospy.get_param("~grinding_ee_link", "pestle_tip")
         self.gathering_ee_link = rospy.get_param("~gathering_ee_link", "spatula_tip")
 
+        self.pestle_ready_joints = None
         self.joint_init = [2.946460723876953, -0.5907570719718933, -0.9750614762306213, -3.834952167380834e-06, -0.3852683901786804, -3.14139196395874]
         self.spatula_joint_init = [2.9464991092681885, -0.604150652885437, -0.7018671631813049, 1.917476083690417e-06, 1.4721944332122803, -3.141698122024536]
 
@@ -78,13 +79,21 @@ class MotionPrimitive:
         post_motion=True,
         execute_by_joint_trajectory=False,
     ):
-        self.pestle_ready_joints = None
         if pre_motion:
-            self.pestle_ready_joints = self.JTC_executor.execute_to_joint_goal(
-            self.joint_init,
-            time_to_reach=3,
-        )
-
+            if self.pestle_ready_joints is not None:
+                self.JTC_executor.execute_to_joint_goal(
+                    self.pestle_ready_joints,
+                    time_to_reach=3,
+                )
+            else:
+                self.pestle_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                    self.init_pose,
+                    ee_link=ee_link,
+                    time_to_reach=3,
+                )
+            if self.pestle_ready_joints == IK_NOT_FOUND:
+                rospy.logerr("Pestle ready IK not found")
+                return False, False
         if execute_by_joint_trajectory:
             joint_trajectory = waypoints
         else:
@@ -115,8 +124,9 @@ class MotionPrimitive:
                     time_to_reach=3,
                 )
             else:
-                self.JTC_executor.execute_to_joint_goal(
-                    self.joint_init,
+                self.pestle_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                    self.init_pose,
+                    ee_link=ee_link,
                     time_to_reach=3,
                 )
 
@@ -133,17 +143,30 @@ class MotionPrimitive:
         moving_acceleration_scale=0.3,
         execute_by_joint_trajectory=False,
     ):
-
-        self.JTC_executor.execute_to_joint_goal(
-            self.pestle_ready_joints,
-            time_to_reach=3,
-        )
+        if self.pestle_ready_joints is not None:
+            self.JTC_executor.execute_to_joint_goal(
+                self.pestle_ready_joints,
+                time_to_reach=3,
+            )
+        else:
+            self.pestle_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                self.init_pose,
+                ee_link=self.grinding_ee_link,
+                time_to_reach=3,
+            )
         
-        self.spatula_ready_joints = self.JTC_executor.execute_to_joint_goal(
-            self.spatula_joint_init,
-            time_to_reach=3,
-        )
-
+        if self.spatula_ready_joints is not None:
+            self.JTC_executor.execute_to_joint_goal(
+                self.spatula_ready_joints,
+                time_to_reach=3,
+            )
+        else:
+            self.spatula_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                self.init_pose,
+                ee_link=self.ee_link,
+                time_to_reach=3,
+            )
+        
         if self.spatula_ready_joints == IK_NOT_FOUND:
             rospy.logerr("Spatula ready IK not found")
             return False, False
@@ -169,16 +192,30 @@ class MotionPrimitive:
             joint_trajectory,
             time_to_reach=gathering_sec,
         )
-
-        self.JTC_executor.execute_to_joint_goal(
-            self.spatula_ready_joints,
-            time_to_reach=3,
-        )
-
-        self.JTC_executor.execute_to_joint_goal(
-            self.pestle_ready_joints,
-            time_to_reach=3,
-        )
+        
+        if self.spatula_ready_joints is not None:
+            self.JTC_executor.execute_to_joint_goal(
+                self.spatula_ready_joints,
+                time_to_reach=3,
+            )
+        else:
+            self.spatula_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                self.init_pose,
+                ee_link=ee_link,
+                time_to_reach=3,
+            )
+        
+        if self.pestle_ready_joints is not None:
+            self.JTC_executor.execute_to_joint_goal(
+                self.pestle_ready_joints,
+                time_to_reach=3,
+            )
+        else:
+            self.pestle_ready_joints = self.JTC_executor.execute_to_goal_pose(
+                self.init_pose,
+                ee_link=self.grinding_ee_link,
+                time_to_reach=3,
+            )
 
         return True, self.spatula_ready_joints
 
