@@ -162,7 +162,7 @@ class MotionPrimitive:
         else:
             self.spatula_ready_joints = self.JTC_executor.execute_to_goal_pose(
                 self.init_pose,
-                ee_link=self.ee_link,
+                ee_link=ee_link,
                 time_to_reach=3,
             )
         
