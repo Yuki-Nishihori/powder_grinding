@@ -52,8 +52,7 @@ class MotionPrimitive:
         self.gathering_ee_link = rospy.get_param("~gathering_ee_link", "spatula_tip")
 
         self.pestle_ready_joints = None
-        self.joint_init = [2.946460723876953, -0.5907570719718933, -0.9750614762306213, -3.834952167380834e-06, -0.3852683901786804, -3.14139196395874]
-        self.spatula_joint_init = [2.9464991092681885, -0.604150652885437, -0.7018671631813049, 1.917476083690417e-06, 1.4721944332122803, -3.141698122024536]
+        self.spatula_ready_joints = None
 
     def _pose_stamped_to_list(self, pose_msg):
         return [
@@ -182,7 +181,7 @@ class MotionPrimitive:
             )
             if joint_trajectory == None:
                 rospy.logerr("No joint trajectory is generated")
-                return False, spatula_ready_joints
+                return False, self.spatula_ready_joints
         self.JTC_executor.execute_to_joint_goal(
             joint_trajectory[0],
             time_to_reach=2,
