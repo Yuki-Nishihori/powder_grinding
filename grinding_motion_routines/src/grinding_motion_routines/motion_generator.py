@@ -1002,3 +1002,429 @@ class MotionGenerator:
         )
 
         return waypoints
+
+    def create_rose_curve_waypoints(
+        self,
+        petal_length_mm,
+        k,
+        waypoints_step_mm=0.5,
+        angle_scale=0,
+        yaw_bias=0,
+        yaw_twist_vel_rad_per_sec=0,
+        motion_velocity_mm_per_sec=50.0,
+        equidistant_points=True,
+    ):
+
+        from fractions import Fraction
+        
+        a_m = petal_length_mm * 0.001
+        if a_m <= 0:
+            raise ValueError("Petal length must be greater than 0.")
+        if k <= 0:
+            raise ValueError("Parameter k must be greater than 0.")
+        
+        frac = Fraction(k).limit_denominator(1000)
+        p, q = frac.numerator, frac.denominator
+
+        theta_max = 2 * np.pi * q
+
+        num_oversampled_points = 20000
+        theta_oversampled = np.linspace(0, theta_max, num_oversampled_points, endpoint=True)
+
+        r_polar = a_m * np.cos(k * theta_oversampled)
+        x_oversampled = r_polar * np.cos(theta_oversampled)
+        y_oversampled = r_polar * np.sin(theta_oversampled)
+
+        distances = np.sqrt(np.diff(x_oversampled)**2 + np.diff(y_oversampled)**2)
+        total_distance_m = np.sum(distances)
+        total_distance_mm = total_distance_m * 1000
+
+        number_of_waypoints - max(1, int(np.ceil(total_distance_mm ./ waypoints_step_mm)))
+        if equidistant_points:
+            cumulative_distance = np.insert(np.cumsum(distances), 0, 0)
+            target_distances = np.linspace(0, cumulative_distance[-1], number_of_waypoints, endpoint=False)
+
+            x = np.interp(target_distances, cumulative_distance, x_oversampled)
+            y = np.interp(target_distances, cumulative_distance, y_oversampled)
+        else:
+            theta = np.linspace(0, theta_max, number_of_waypoints, endpoint=False)
+            r_polar = a_m * np.cos(k * theta)
+            x = r_polar * np.cos(theta)
+            y = r_polar * np.sin(theta)
+        
+        z = self._ellipsoid_z_lower(
+            x,
+            y,
+            [
+                self.mortar_inner_size["x"],
+                self.mortar_inner_size["y"],
+                self.mortar_inner_size["z"],
+            ],
+        )
+
+        position = np.array([x, y, z])
+        shifted_position = np.array(
+            [
+                position[0] + self.mortar_top_center_position["x"],
+                position[1] + self.mortar_top_center_position["y"],
+                position[2] + self.mortar_top_center_position["z"],
+            ]
+        )
+        total_yaw_twist = 0 
+        if yaw_twist_vel_rad_per_sec != 0:
+            estimated_execution_time = total_distance_mm / motion_velocity_mm_per_sec
+            total_yaw_twist = yaw_twist_vel_rad_per_sec * estimated_execution_time
+
+            if abs(total_yaw_twist) > self.max_yaw_twist:
+                limited_yaw_twist = self.max_yaw_twist
+                iterations = int(np.ceil(abs(total_yaw_twist) / self.max_yaw_twist))
+                limited_number_of_waypoints = int(number_of_waypoints / iterations)
+                
+                if limited_number_of_waypoints < 1:
+                    raise ValueError(
+                        "Can't calculate motion, waypoints per iteration would be less than 1"
+                    )
+                warnings.warn(
+                    f"Total yaw_twist ({total_yaw_twist:.3f} rad) exceeds max_yaw_twist ({self.max_yaw_twist} rad). Dividing the motion into {iterations} iterations with limited_yaw_twist ({limited_yaw_twist:.2f} rad)."
+                )
+                warnings.warn(
+                    f"iterations: {iterations}, limited_number_of_waypoints: {limited_number_of_waypoints}"
+                )
+
+                if equidistant_points:
+                    cumulative_distance = np.insert(np.cumsum(distances), 0, 0)
+                    target_distances = np.linspace(0, cumulative_distance[-1], limited_number_of_waypoints, endpoint=False)
+
+                    x_limited = np.interp(target_distances, cumulative_distance, x_oversampled)
+                    y_limited = np.interp(target_distances, cumulative_distance, y_oversampled)
+                else:
+                    theta_limited = np.linspace(0, theta_max, limited_number_of_waypoints, endpoint=False)
+                    r_polar_limited = a_m * np.cos(k * theta_limited)
+                    x_limited = r_polar_limited * np.cos(theta_limited)
+                    y_limited = r_polar_limited * np.sin(theta_limited)
+                z_limited = self._ellipsoid_z_lower(
+                    x_limited,
+                    y_limited,
+                    [
+                        self.mortar_inner_size["x"],
+                        self.mortar_inner_size["y"],
+                        self.mortar_inner_size["z"],
+                    ],
+                )
+                position_limited = np.array([x_limited, y_limited, z_limited])
+                shifted_position_limited = np.array(
+                    [
+                        position_limited[0] + self.mortar_top_center_position["x"],
+                        position_limited[1] + self.mortar_top_center_position["y"],
+                        position_limited[2] + self.mortar_top_center_position["z"],
+                    ]
+                )
+                quat_limited = self._calc_quaternion_of_mortar_inner_wall(
+                    position_limited, angle_scale, yaw_bias, limited_yaw_twist
+                )
+                partial_waypoints = np.stack(
+                    [
+                        shifted_position_limited[0],
+                        shifted_position_limited[1],
+                        shifted_position_limited[2],
+                        quat_limited.T[0],
+                        quat_limited.T[1],
+                        quat_limited.T[2],
+                        quat_limited.T[3],
+                    ]
+                ).T
+
+                print(f"partial_waypoints shape: {partial_waypoints.shape}")
+                waypoints = []
+                for i in range(iterations):
+                    if i % 2 == 0:
+                        waypoints.extend(partial_waypoints[0:-1])
+                    else:
+                        p = partial_waypoints[::-1]
+                        waypoints.extend(p[0:-1])
+                waypoints = np.array(waypoints)
+            
+            else:
+                quat = self._calc_quaternion_of_mortar_inner_wall(
+                    position=position,
+                    angle_scale=angle_scale,
+                    yaw_bias=yaw_bias,
+                    yaw_twist=total_yaw_twist,
+                )
+
+                waypoints = np.stack(
+                    [
+                        shifted_position[0],
+                        shifted_position[1],
+                        shifted_position[2],
+                        quat.T[0],
+                        quat.T[1],
+                        quat.T[2],
+                        quat.T[3],
+                    ]
+                ).T
+
+                waypoints, index = np.unique(waypoints, axis=0, return_index=True)
+                waypoints = waypoints[np.argsort(index)]
+            else:
+                quat = self._calc_quaternion_of_mortar_inner_wall(
+                    position=position,
+                    angle_scale=angle_scale,
+                    yaw_bias=yaw_bias,
+                    yaw_twist=0,
+                )
+                waypoints = np.stack(
+                    [
+                        shifted_position[0],
+                        shifted_position[1],
+                        shifted_position[2],
+                        quat.T[0],
+                        quat.T[1],
+                        quat.T[2],
+                        quat.T[3],
+                    ]
+                ).T
+
+                waypoints, index = np.unique(waypoints, axis=0, return_index=True)
+                waypoints = waypoints[np.argsort(index)]
+
+        else:
+            quat = self._calc_quaternion_of_mortar_inner_wall(
+                position=position,
+                angle_scale=angle_scale,
+                yaw_bias=yaw_bias,
+                yaw_twist=total_yaw_twist,
+            )
+
+            waypoints = np.stack(
+                [
+                    shifted_position[0],
+                    shifted_position[1],
+                    shifted_position[2],
+                    quat.T[0],
+                    quat.T[1],
+                    quat.T[2],
+                    quat.T[3],
+                ]
+            ).T
+
+            waypoints, index = np.unique(waypoints, axis=0, return_index=True)
+            waypoints = waypoints[np.argsort(index)]
+
+        print(
+            f"Generated {len(waypoints)} waypoints for the rose curve with petal length {petal_length_mm} mm, k {k}, and step size {waypoints_step_mm} mm."
+        )
+
+        return waypoints
+    
+    def _gcd(self, a, b):
+        while b:
+            a, b = b, a % b
+        return a
+
+    def _lcm(self, a, b):
+        if a == 0 or b == 0:
+            return 0
+        return abs(a * b) // self._gcd(a, b)
+    
+    def create_lissajous_curve_waypoints(
+        self,
+        amplitude_x_mm,
+        amplitude_y_mm,
+        frequency_ratio_a,
+        frequency_ratio_b,
+        phase_shift_delta_rad=0.0,
+        waypoints_step_mm=0.5,
+        angle_scale=0,
+        yaw_bias=0,
+        yaw_twist_vel_rad_per_sec=0,
+        motion_velocity_mm_per_sec=50.0,
+        equidistant_points=True,
+    ):
+        A_m = amplitude_x_mm * 0.001
+        B_m = amplitude_y_mm * 0.001
+
+        if A_m <= 0 or B_m <= 0:
+            raise ValueError("Amplitudes must be greater than 0.")
+        if frequency_ratiio_a <= 0 or frequency_ratio_b <= 0:
+            raise ValueError("Frequency ratios must be greater than 0.")
+        
+        frac_a = Fraction(frequency_ratio_a).limit_denominator(1000)
+        frac_b = Fraction(frequency_ratio_b).limit_denominator(1000)
+
+        if frequency_ratio_b == 0:
+            raise ValueError("frequency_ratio_b cannot be zero.")
+        ratio_ab_frac = Fraction(frequency_ratio_a / frequency_ratio_b).limit_denominator(1000)
+        t_max = 2 * np.pi * ratio_ab_frac.denominator
+
+        num_oversampled_points = 20000
+        t_oversampled = np.linspace(0, t_max, num_oversampled_points, endpoint=True)
+
+        x_oversampled = A_m * np.sin(frequency_ratio_a * t_oversampled + phase_shift_delta_rad)
+        y_oversampled = B_m * np.sin(frequency_ratio_b * t_oversampled)
+
+        distances = np.sqrt(np.diff(x_oversampled)**2 + np.diff(y_oversampled)**2)
+        total_distance_m = np.sum(distances)
+        total_distance_mm = total_distance_m * 1000
+
+        number_of_waypoints = max(1, int(np.ceil(total_distance_mm / waypoints_step_mm)))
+        
+        if equidistant_points:
+            cumulative_distance = np.insert(np.cumsum(distances), 0, 0)
+            target_distances = np.linspace(0, cumulative_distance[-1], number_of_waypoints, endpoint=False)
+
+            x = np.interp(target_distances, cumulative_distance, x_oversampled)
+            y = np.interp(target_distances, cumulative_distance, y_oversampled)
+        else:
+            t = np.linespace(0, t_max, number_of_waypoints, endpoint=False)
+            x = A_m * np.sin(frequency_ratio_a * t + phase_shift_delta_rad)
+            y = B_m * np.sin(frequency_ratio_b * t)
+        
+        if np.any(np.abs(x) > self.mortar_inner_size["x"]):
+            warnings.warn("Calculated x exceeds mortar_inner_size['x']. Curve may be clipped.")
+        if np.any(np.abs(y) > self.mortar_inner_size["y"]):
+            warnings.warn("Calculated y exceeds mortar_inner_size['y']. Curve may be clipped.")
+        
+        z = self._ellipsoid_z_lower(
+            x,
+            y,
+            [
+                self.mortar_inner_size["x"],
+                self.mortar_inner_size["y"],
+                self.mortar_inner_size["z"],
+            ],
+        )
+
+        position = np.array([x, y, z])
+
+        shifted_position = np.array(
+            [
+                position[0] + self.mortar_top_center_position["x"],
+                position[1] + self.mortar_top_center_position["y"],
+                position[2] + self.mortar_top_center_position["z"],
+            ]
+        )
+
+        total_yaw_twist = 0
+        if yaw_twist_vel_rad_per_sec != 0:
+            estimated_execution_time = total_distance_mm / motion_velocity_mm_per_sec
+            total_yaw_twist = yaw_twist_vel_rad_per_sec * estimated_execution_time
+
+            if abs(total_yaw_twist) > self.max_yaw_twist:
+                limited_yaw_twist = self.max_yaw_twist
+                iterations = int(np.ceil(abs(total_yaw_twist) / self.max_yaw_twist))
+                limited_number_of_waypoints = int(number_of_waypoints / iterations)
+
+                if abs(total_yaw_twist) < 1e-6:
+                    raise ValueError(
+                        "Can't calculate motion, waypoints per iteration would be less than 1"
+                    )
+                warnings.warn(
+                    f"Total yaw_twist ({total_yaw_twist:.3f} rad) exceeds max_yaw_twist ({self.max_yaw_twist} rad). Dividing the motion into {iterations} iterations with limited_yaw_twist ({limited_yaw_twist:.2f} rad)."
+                )
+                warnings.warn(
+                    f"iterations: {iterations}, limited_number_of_waypoints: {limited_number_of_waypoints}"
+                )
+
+                if equidistant_points:
+                    cumulative_distance = np.insert(np.cumsum(distances), 0, 0)
+                    target_distances = np.linspace(0, cumulative_distance[-1], limited_number_of_waypoints, endpoint=False)
+
+                    x_limited = np.interp(target_distances, cumulative_distance, x_oversampled)
+                    y_limited = np.interp(target_distances, cumulative_distance, y_oversampled)
+                else:
+                    theta_limited = np.linspace(0, t_max, limited_number_of_waypoints, endpoint=False)
+                    x_limited = (R + r) * np.cos(theta_limited) - d * np.cos(((R + r) / r) * theta_limited)
+                    y_limited = (R + r) * np.sin(theta_limited) - d * np.sin(((R + r) / r) * theta_limited)
+
+                z_limited = self._ellipsoid_z_lower(
+                    x_limited,
+                    y_limited,
+                    [
+                        self.mortar_inner_size["x"],
+                        self.mortar_inner_size["y"],
+                        self.mortar_inner_size["z"],
+                    ],
+                )
+                position_limited = np.array([x_limited, y_limited, z_limited])
+                shifted_position_limited = np.array(
+                    [
+                        position_limited[0] + self.mortar_top_center_position["x"],
+                        position_limited[1] + self.mortar_top_center_position["y"],
+                        position_limited[2] + self.mortar_top_center_position["z"],
+                    ]
+                )
+                quat_limited = self._calc_quaternion_of_mortar_inner_wall(
+                    position_limited, angle_scale, yaw_bias, limited_yaw_twist
+                )
+
+                partial_waypoints = np.stack(
+                    [
+                        shifted_position_limited[0],
+                        shifted_position_limited[1],
+                        shifted_position_limited[2],
+                        quat_limited.T[0],
+                        quat_limited.T[1],
+                        quat_limited.T[2],
+                        quat_limited.T[3],
+                    ]
+                ).T
+                print(f"partial_waypoints shape: {partial_waypoints.shape}")
+                waypoints = []
+                for i in range(iterations):
+                    if i % 2 == 0:
+                        waypoints.extend(partial_waypoints[0:-1])
+                    else:
+                        p = partial_waypoints[::-1]
+                        waypoints.extend(p[0:-1])
+                
+                waypoints = np.array(waypoints)
+            else:
+                quat = self._calc_quaternion_of_mortar_inner_wall(
+                    position=position,
+                    angle_scale=angle_scale,
+                    yaw_bias=yaw_bias,
+                    yaw_twist=total_yaw_twist,
+                )
+
+                waypoints = np.stack(
+                    [
+                        shifted_position[0],
+                        shifted_position[1],
+                        shifted_position[2],
+                        quat.T[0],
+                        quat.T[1],
+                        quat.T[2],
+                        quat.T[3],
+                    ]
+                ).T
+
+                waypoints, index = np.unique(waypoints, axis=0, return_index=True)
+                waypoints = waypoints[np.argsort(index)]
+        else:
+            quat = self._calc_quaternion_of_mortar_inner_wall(
+                position=position,
+                angle_scale=angle_scale,
+                yaw_bias=yaw_bias,
+                yaw_twist=0,
+            )
+            waypoints = np.stack(
+                [
+                    shifted_position[0],
+                    shifted_position[1],
+                    shifted_position[2],
+                    quat.T[0],
+                    quat.T[1],
+                    quat.T[2],
+                    quat.T[3],
+                ]
+            ).T
+
+            waypoints, index = np.unique(waypoints, axis=0, return_index=True)
+            waypoints = waypoints[np.argsort(index)]
+
+        print(
+            f"Generated {len(waypoints)} waypoints for the Lissajous curve with amplitudes {amplitude_x_mm} mm, {amplitude_y_mm} mm, frequency ratios {frequency_ratio_a}, {frequency_ratio_b}, phase shift {phase_shift_delta_rad} rad, and step size {waypoints_step_mm} mm."
+        )
+
+        return waypoints
