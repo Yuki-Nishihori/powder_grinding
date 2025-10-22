@@ -1039,7 +1039,7 @@ class MotionGenerator:
         total_distance_m = np.sum(distances)
         total_distance_mm = total_distance_m * 1000
 
-        number_of_waypoints - max(1, int(np.ceil(total_distance_mm ./ waypoints_step_mm)))
+        number_of_waypoints = max(1, int(np.ceil(total_distance_mm / waypoints_step_mm)))
         if equidistant_points:
             cumulative_distance = np.insert(np.cumsum(distances), 0, 0)
             target_distances = np.linspace(0, cumulative_distance[-1], number_of_waypoints, endpoint=False)
@@ -1166,28 +1166,6 @@ class MotionGenerator:
 
                 waypoints, index = np.unique(waypoints, axis=0, return_index=True)
                 waypoints = waypoints[np.argsort(index)]
-            else:
-                quat = self._calc_quaternion_of_mortar_inner_wall(
-                    position=position,
-                    angle_scale=angle_scale,
-                    yaw_bias=yaw_bias,
-                    yaw_twist=0,
-                )
-                waypoints = np.stack(
-                    [
-                        shifted_position[0],
-                        shifted_position[1],
-                        shifted_position[2],
-                        quat.T[0],
-                        quat.T[1],
-                        quat.T[2],
-                        quat.T[3],
-                    ]
-                ).T
-
-                waypoints, index = np.unique(waypoints, axis=0, return_index=True)
-                waypoints = waypoints[np.argsort(index)]
-
         else:
             quat = self._calc_quaternion_of_mortar_inner_wall(
                 position=position,
