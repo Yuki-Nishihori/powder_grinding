@@ -1219,12 +1219,13 @@ class MotionGenerator:
         motion_velocity_mm_per_sec=50.0,
         equidistant_points=True,
     ):
+        from fractions import Fraction
         A_m = amplitude_x_mm * 0.001
         B_m = amplitude_y_mm * 0.001
 
         if A_m <= 0 or B_m <= 0:
             raise ValueError("Amplitudes must be greater than 0.")
-        if frequency_ratiio_a <= 0 or frequency_ratio_b <= 0:
+        if frequency_ratio_a <= 0 or frequency_ratio_b <= 0:
             raise ValueError("Frequency ratios must be greater than 0.")
         
         frac_a = Fraction(frequency_ratio_a).limit_denominator(1000)
